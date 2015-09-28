@@ -16,20 +16,32 @@
  */
 #define MESSAGE_SIZE	512
 #define BUFFER_SIZE		512
-typedef const char* MESSAGE_TYPE;
+typedef char* MESSAGE_TYPE;
 
-MESSAGE_TYPE MESSAGE_TOKEN		= "::__::";
-MESSAGE_TYPE MESSAGE_SPLITTER 	= ";;";
-MESSAGE_TYPE REQUEST_REFRESH	= "request_refresh";
-MESSAGE_TYPE ACK_REFRESH		= "ack_refresh";
-MESSAGE_TYPE REQUEST_FILELIST	= "request_filelist";
-MESSAGE_TYPE ACK_FILELIST		= "ack_filelist";
-MESSAGE_TYPE REQUEST_UPLOAD		= "request_upload";
-MESSAGE_TYPE ACK_UPLOAD			= "ack_upload";
-MESSAGE_TYPE REQUEST_DOWNLOAD	= "request_download";
-MESSAGE_TYPE ACK_DOWNLOAD		= "ack_download";
-MESSAGE_TYPE REQUEST_CHECK_CONNECTION	= "request_checkconnection";
-MESSAGE_TYPE ACK_CHECK_CONNECTION		= "ack_checkconnection";
+#define MESSAGE_TOKEN		 "::__::"
+#define MESSAGE_SPLITTER 	 ";;"
+#define REQUEST_REFRESH	 	 "request_refresh"
+#define ACK_REFRESH		 	 "ack_refresh"
+#define REQUEST_FILELIST	 "request_FileList"
+#define ACK_FILELIST		 "ack_FileList"
+#define REQUEST_UPLOAD		 "request_upload"
+#define ACK_UPLOAD			 "ack_upload"
+#define REQUEST_DOWNLOAD	 "request_download"
+#define ACK_DOWNLOAD		 "ack_download"
+#define REQUEST_CHECK_CONNECTION	 "request_checkconnection"
+#define ACK_CHECK_CONNECTION		 "ack_checkconnection"
+
+/*
+ * IPC Message 핸들러
+ */
+#define MAX_HANDLER		16		// 핸들러의 갯수
+typedef enum {
+	REFRESH,
+	FILELIST,
+	UPLOAD,
+	DOWNLOAD,
+	CHK_CONN,
+} OPERATION;
 
 /*
  * 주고 받는 메세지 구조체 정의

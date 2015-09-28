@@ -35,6 +35,18 @@ void	synchronizeFileList(void);
 // 소켓 통신에 사용되는 버퍼
 char buffer[BUFFER_SIZE];
 
+// IPC Message 핸들러
+void	check_connection(char *msg);
+void	refresh(char *msg);
+void	filelist(char *msg);
+
+typedef struct {
+	void (*check_connection)(char* msg);
+	void (*refresh)(char* msg);
+	void (*filelist)(char* msg);
+} HANDLER;
+HANDLER handlers;
+
 /*
  * 소켓 통신위ᅟ한 변수 선언
  */
@@ -43,12 +55,41 @@ int sockfd_out;
 struct sockaddr_in serv_addr;
 struct hostent *server;
 
+void initHandlers() {
+	handlers.check_connection = &check_connection;
+	handlers.refresh = &refresh;
+	handlers.filelist = &filelist;
+}
+
+void check_connection(char* msg)
+{
+	/*
+	 * check_connection ACK을 받으면 성공한 것으로 처리
+	 */
+	fprintf(stderr, "Okay. we succeed to connect to JAVA based program.");
+}
+
+void refresh(char *msg)
+{
+
+}
+
+void filelist(char *msg)
+{
+	// TODO
+	// 파일 리스트 갱신으로 메세지를 받았을 때
+	// 파일리스트 갱신을 수행한다.
+}
 
 void* listening(void* arg)
 {
 	// 쓰레드 확인
 	pthread_t id = pthread_self();
 	fprintf(stdout, "Operator thread is running... id = %lu\n", id);
+
+	// 메세지 핸들러 초기화
+	initHandlers();
+
 	// 소켓 연결 준비
     sockfd_in = socket(AF_INET, SOCK_STREAM, 0);
     sockfd_out = socket(AF_INET, SOCK_STREAM, 0);
@@ -90,9 +131,9 @@ void* listening(void* arg)
 	fprintf(stdout, "Synchronize file list...\n");
 	synchronizeFileList();
 
-	bzero(buffer, BUFFER_SIZE);
 	// 연결이 성공하면 루프 돌면서 External Service와 통신한다.
 	while (true) {
+		// ExternalService로부터 받은 ACK 또한 Operation을 수행
 		receiveAndHandleMessage();
 		sleep(1);
 	}
@@ -110,12 +151,20 @@ void* listening(void* arg)
  */
 void receiveAndHandleMessage(void)
 {
-	if (read(sockfd_in, buffer, MESSAGE_SIZE) < 0) {
+	if (read(sockfd_in, buffer, BUFFER_SIZE) < 0) {
 		fprintf(stderr, "Failed to receive message");
 	}
-	// 전송 받은 내용을 분석하여 메세지의 타입을 알아낸다.
 
 	// 타입에 적절한 핸들러를 호출한다.
+	if (strncmp(buffer, ACK_CHECK_CONNECTION, strlen(ACK_CHECK_CONNECTION)) == 0) {
+		handlers.check_connection(buffer);
+	}
+	else if (strncmp(buffer, ACK_FILELIST, strlen(ACK_FILELIST)) == 0) {
+		handlers.filelist(buffer);
+	}
+	else if (strncmp(buffer, ACK_REFRESH, strlen(ACK_REFRESH)) == 0) {
+		handlers.refresh(buffer);
+	}
 }
 
 /*
@@ -224,7 +273,6 @@ bool send_message(MESSAGE* msg) {
 		fprintf(stderr, "Failed to send message type.\n");
 		return false;
 	}
-
 	// 값 전송
 	if (msg->value != NULL && strlen(msg->value) != 0) {
 		prepareBufferWithValue(buffer, (char *)msg->value, MESSAGE_SIZE);
@@ -237,7 +285,6 @@ bool send_message(MESSAGE* msg) {
 		fprintf(stderr, "Failed to send message value.\n");
 		return false;
 	}
-
 	// 메세지 토큰을 보내 전송 종료을 알린다.
 	prepareBufferWithValue(buffer, (char *)flag, strlen(flag) * sizeof(char));
 	if (write(sockfd_out, buffer, strlen(buffer)) < 0) {
