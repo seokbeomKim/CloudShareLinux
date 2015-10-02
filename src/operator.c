@@ -66,7 +66,7 @@ void check_connection(char* msg)
 	/*
 	 * check_connection ACK을 받으면 성공한 것으로 처리
 	 */
-	fprintf(stderr, "Okay. we succeed to connect to JAVA based program.");
+	fprintf(stderr, "Okay. we succeed to connect to JAVA based program.\n");
 }
 
 void refresh(char *msg)
@@ -165,6 +165,8 @@ void receiveAndHandleMessage(void)
 	else if (strncmp(buffer, ACK_REFRESH, strlen(ACK_REFRESH)) == 0) {
 		handlers.refresh(buffer);
 	}
+
+	bzero(buffer, BUFFER_SIZE);
 }
 
 /*
@@ -229,18 +231,32 @@ void synchronizeFileList(void)
 }
 /*
  * requestFileDownload
+ * 파일 다운로드를 요청한다.
  */
+// read의 경우는 연달아서 발생하는 경우가 있기 때문에 이를 처리하기 위해 prev_msg를 이용한다.
+MESSAGE prev_msg;
 void requestFileDownload(char* filepath)
 {
 	fprintf(stdout, "Request file download...\n");
 	MESSAGE msg;
 	msg.type = REQUEST_DOWNLOAD;
 	strcpy(msg.value, filepath);
+
+	// prev_msg와 비교 후, 같은 경우에는 download 요청을 하지 않는다.
+	if (prev_msg.type == msg.type &&
+			strcmp(prev_msg.value, msg.value) == 0) {
+		fprintf(stdout, "Skip send message..\n");
+		return;
+	}
+
+	prev_msg.type = msg.type;
+	strcpy(prev_msg.value, msg.value);
 	send_message(&msg);
 }
 
 /*
  * requestFileUpload
+ * 파일 업로드를 요청한다.
  */
 void requestFileUpload(char* filepath)
 {
