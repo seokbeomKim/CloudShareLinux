@@ -32,18 +32,6 @@ typedef char* MESSAGE_TYPE;
 #define ACK_CHECK_CONNECTION		 "ack_checkconnection"
 
 /*
- * IPC Message 핸들러
- */
-#define MAX_HANDLER		16		// 핸들러의 갯수
-typedef enum {
-	REFRESH,
-	FILELIST,
-	UPLOAD,
-	DOWNLOAD,
-	CHK_CONN,
-} OPERATION;
-
-/*
  * 주고 받는 메세지 구조체 정의
  */
 typedef struct {

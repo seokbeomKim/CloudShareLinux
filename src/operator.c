@@ -14,7 +14,8 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-
+#include "error_code.h"
+#include <signal.h>
 /*
  * operator thread
  * 프로그램이 실행되면 operator 쓰레드가 실행된다. C 프로그램과
@@ -27,11 +28,14 @@
 #include "protocol.h"
 #define _DEBUG_
 
+extern bool isOperatorRunning;
+
 MESSAGE message;
-char*	test_connection(MESSAGE *msg);
 void	receiveAndHandleMessage(void);
 bool	send_message(MESSAGE* msg);
-void	synchronizeFileList(void);
+void	synchronizeMetaFiles(void);
+bool	checkConnection(void);
+
 // 소켓 통신에 사용되는 버퍼
 char buffer[BUFFER_SIZE];
 
@@ -47,9 +51,6 @@ typedef struct {
 } HANDLER;
 HANDLER handlers;
 
-/*
- * 소켓 통신위ᅟ한 변수 선언
- */
 int sockfd_in;
 int sockfd_out;
 struct sockaddr_in serv_addr;
@@ -61,47 +62,23 @@ void initHandlers() {
 	handlers.filelist = &filelist;
 }
 
-void check_connection(char* msg)
-{
-	/*
-	 * check_connection ACK을 받으면 성공한 것으로 처리
-	 */
-	fprintf(stderr, "Okay. we succeed to connect to JAVA based program.\n");
-}
+void initSockets() {
+	sockfd_in	= socket(AF_INET, SOCK_STREAM, 0);
+	sockfd_out	= socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd_in < 0 || sockfd_out < 0)
+	{
+		perror("ERROR opening socket");
+		_exit(FAILED_OPEN_SOCKET);
+	}
 
-void refresh(char *msg)
-{
-
-}
-
-void filelist(char *msg)
-{
-	// TODO
-	// 파일 리스트 갱신으로 메세지를 받았을 때
-	// 파일리스트 갱신을 수행한다.
-}
-
-void* listening(void* arg)
-{
-	// 쓰레드 확인
-	pthread_t id = pthread_self();
-	fprintf(stdout, "Operator thread is running... id = %lu\n", id);
-
-	// 메세지 핸들러 초기화
-	initHandlers();
-
-	// 소켓 연결 준비
-    sockfd_in = socket(AF_INET, SOCK_STREAM, 0);
-    sockfd_out = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd_in < 0 || sockfd_out < 0) {
-        perror("ERROR opening socket");
-    }
 	// 소켓 연결 대기
-    server = gethostbyname("127.0.0.1");
-    if (server == NULL) {
-    	perror("ERROR, host not found\n");
-    }
-    bzero((char *) &serv_addr, sizeof(serv_addr));
+	server	= gethostbyname("127.0.0.1");
+	if (server == NULL)
+	{
+		perror("ERROR, host not found\n");
+		_exit(HOST_NOT_FOUND);
+	}
+	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_port = htons(PORT_NUM_IN);
 	bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
@@ -109,7 +86,7 @@ void* listening(void* arg)
 	{
 		perror("ERROR connecting to server(in-socket)");
 	}
-    bzero((char *) &serv_addr, sizeof(serv_addr));
+	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_port = htons(PORT_NUM_OUT);
 	bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
@@ -120,7 +97,47 @@ void* listening(void* arg)
 
 	// 연결 확인 메세지
 	MESSAGE msg = { REQUEST_CHECK_CONNECTION, "" };
-	send_message(&msg);
+	if (send_message(&msg) == false) {
+		fprintf(stderr, "Failed to send PING to Operator. There might be connection problem.\n");
+		_exit(FAILED_SEND_MSG);
+	}
+}
+
+/*
+ * checkConnection
+ * Operator와의 연결을 확인한다.
+ *
+ */
+bool checkConnection(void)
+{
+	// 연결 확인 메세지
+	int error = 0;
+	socklen_t len = sizeof (error);
+	int retval = getsockopt (sockfd_out, SOL_SOCKET, SO_ERROR, &error, &len);
+
+	if (retval != 0) {
+	    /* there was a problem getting the error code */
+	    fprintf(stdout, "error getting socket error code: %s\n", strerror(retval));
+	    return false;
+	}
+
+	if (error != 0) {
+	    /* socket has a non zero error status */
+	    fprintf(stdout, "socket error: %s\n", strerror(error));
+	    return false;
+	}
+	return true;
+}
+
+void* listening(void* arg)
+{
+	isOperatorRunning = true;
+
+	// 메세지 핸들러 초기화
+	initHandlers();
+
+	// 소켓 연결 준비
+	initSockets();
 
 	/*
 	 * 프로그램 시작 전, 파일의 리스트를 초기화하여야 하기 때문에 이 부분을 여기서 처리한다.
@@ -128,14 +145,13 @@ void* listening(void* arg)
 	 * 일차적으로 .CloudShare 디렉토리 내의 파일 리스트를 통해 readdir을 로드하도록 한다.
 	 * 여기서 실행되는 초기화 명령을 통해 thread에서 메타파일을 비동기적으로 다운로드 하도록 한다.
 	 */
-	fprintf(stdout, "Synchronize file list...\n");
-	synchronizeFileList();
+	synchronizeMetaFiles();
 
 	// 연결이 성공하면 루프 돌면서 External Service와 통신한다.
 	while (true) {
 		// ExternalService로부터 받은 ACK 또한 Operation을 수행
 		receiveAndHandleMessage();
-		sleep(1);
+		sleep(LATENCY);
 	}
 
 	return (void *)0;
@@ -169,44 +185,20 @@ void receiveAndHandleMessage(void)
 	bzero(buffer, BUFFER_SIZE);
 }
 
-/*
- * 테스트하기 위한 함수 (처음에 서버로부터의 응답 확인)
- * 서버로 MESSAGE를 전송하고 응답을 받아 반환한다.
- */
-char* test_connection(MESSAGE* msg) {
-	// 먼저 메세지 타입을 보내고 준비된 서버에서 ACK을 받으면 값을 보낸다.
-	// MESSAGE 타입 전송
-	MESSAGE_TYPE type = msg->type;
-	prepareBufferWithValue(buffer, (char *)type, strlen(type) * sizeof(char));
-	if (write(sockfd_out, buffer, strlen(buffer)) < 0) {
-		fprintf(stderr, "Failed to send message type.\n");
-	}
+// ACK 핸들러
+void check_connection(char* msg)
+{
+	fprintf(stdout, "ACK from Operator - Check Connection");
+}
 
-    // 메세지 타입 전송 후에는 ACK을 받는다.
-	bzero(buffer, BUFFER_SIZE);
-	if (read(sockfd_in, buffer, MESSAGE_SIZE) < 0) {
-		fprintf(stderr, "Failed to receive ACK message from external service.\n");
-	}
-	printf("Received ACK from type : %s", buffer);
-	// 값 전송
-	if (msg->value != NULL && strlen(msg->value) != 0) {
-		prepareBufferWithValue(buffer, (char *)msg->value, MESSAGE_SIZE);
-	}
-	else {
-		// 값이 유효하지 않은 경우
-		prepareBufferWithValue(buffer, "nothing", MESSAGE_SIZE);
-	}
-	if (write(sockfd_out, buffer, strlen(buffer)) < 0) {
-		fprintf(stderr, "Failed to send message value.\n");
-	}
-	// 값 전송 후에 ACK 받음
-	bzero(buffer, BUFFER_SIZE);
-	if (read(sockfd_in, buffer, BUFFER_SIZE) < 0) {
-		fprintf(stderr, "Failed to receive ACK message from external service.\n");
-	}
-	printf("Received ACK from value : %s", buffer);
+void refresh(char *msg)
+{
+	fprintf(stdout, "ACK from Operator - Refresh\n");
+}
 
-	return buffer;
+void filelist(char *msg)
+{
+	fprintf(stdout, "ACK from Operator - FileList\n");
 }
 
 /*
@@ -217,17 +209,20 @@ char* test_connection(MESSAGE* msg) {
  * 자바 프로그램으로 메세지를 보낸 후 수행한다.
  */
 /*
- * synchronizeFileList
+ * synchronizeMetaFiles
  * 연결되어 있는 클라이언트들에게 파일리스트를 요청하여 현재 로컬에 없는 파일 메타데이터를 다운로드하여
  * 파일리스트를 동기화한다.
  */
-void synchronizeFileList(void)
+void synchronizeMetaFiles(void)
 {
 	MESSAGE msg = {
 			REQUEST_FILELIST,
 			""
 	};
-	send_message(&msg);
+	if (send_message(&msg) == false) {
+		fprintf(stderr, "Failed to send PING to Operator. There might be connection problem.\n");
+		_exit(FAILED_SEND_MSG);
+	}
 }
 /*
  * requestFileDownload
@@ -251,20 +246,37 @@ void requestFileDownload(char* filepath)
 
 	prev_msg.type = msg.type;
 	strcpy(prev_msg.value, msg.value);
-	send_message(&msg);
+	if (send_message(&msg) == false) {
+		fprintf(stderr, "Failed to send PING to Operator. There might be connection problem.\n");
+		_exit(2);
+	}
 }
 
 /*
  * requestFileUpload
  * 파일 업로드를 요청한다.
  */
+MESSAGE prev_msg2;
 void requestFileUpload(char* filepath)
 {
 	fprintf(stdout, "Request file upload...\n");
 	MESSAGE msg;
 	msg.type = REQUEST_UPLOAD;
 	strcpy(msg.value, filepath);
-	send_message(&msg);
+
+	// prev_msg와 비교 후, 같은 경우에는 download 요청을 하지 않는다.
+	if (prev_msg2.type == msg.type &&
+			strcmp(prev_msg2.value, msg.value) == 0) {
+		fprintf(stdout, "Skip send message..\n");
+		return;
+	}
+	fprintf(stdout, "Send upload message...\n");
+	prev_msg2.type = msg.type;
+	strcpy(prev_msg2.value, msg.value);
+	if (send_message(&msg) == false) {
+		fprintf(stderr, "Failed to send PING to Operator. There might be connection problem.\n");
+		_exit(FAILED_SEND_MSG);
+	}
 }
 
 /*
@@ -273,6 +285,7 @@ void requestFileUpload(char* filepath)
  * 단순히 메세지를 구성하여 보내기만 하고 수신은 listening 쓰레드에서 수행한다.
  */
 bool send_message(MESSAGE* msg) {
+	// 이전 메세지와 같은 메세지는 보낼 수 없다.
 	// 메세지 토큰을 보내 전송 시작을 알린다.
 	MESSAGE_TYPE flag = MESSAGE_TOKEN;
 	prepareBufferWithValue(buffer, (char *)flag, strlen(flag) * sizeof(char));

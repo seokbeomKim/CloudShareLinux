@@ -28,9 +28,10 @@
 #include <netdb.h>
 #include <pwd.h>
 #include "operator.h"
+#include "error_code.h"
 
 pthread_t operator_tid;	// operator thread id
-int shared_value = 0;
+pthread_t main_thread;
 
 /*
  * 파일 및 디렉토리 구조
@@ -45,14 +46,23 @@ int shared_value = 0;
 #define FUSE_MOUNTER_DWLPATH		"/Download"		// CloudShare에서 사용자가 선택한 파일이 다운로드될 위치
 #define CLOUDSHARE_SUFFIX			".cs"
 
-char* home_dir; // 홈 디렉토리
-char cache_dir[BUFFER_SIZE];	// 메타데이터 저장될 위치 (CDIRPATH)
-char mountpoint[BUFFER_SIZE]; // 유저에게 보여줄 마운트 포인트
+char*	home_dir; // 홈 디렉토리
+char 	cache_dir[BUFFER_SIZE];	// 메타데이터 저장될 위치 (CDIRPATH)
+char	mountpoint[BUFFER_SIZE]; // 유저에게 보여줄 마운트 포인트
 
 extern void requestFileDownload(char *);
 extern void requestFileUpload(char *);
 
+static void get_cache_path(char *dst, const char* path, int size);
+
 static char str[BUFFER_SIZE];
+
+static bool reading = false;
+static bool writing = false;
+
+bool isOperatorRunning;
+
+
 
 /* ==============================================================
  * Helper functions
@@ -90,14 +100,18 @@ char* remove_cs_suffix(char* filename) {
  * true이면 cs파일, false이면 cs파일이 아니다.
  * ==============================================================
  */
-bool isCsFile(char* path) {
+bool isCsFile(const char* path) {
 	char *suffix = CLOUDSHARE_SUFFIX;
 	char *bname;
 	char *path2 = strdup(path);
+	char temp[BUFFER_SIZE];
+	get_cache_path(temp, path, BUFFER_SIZE);
+
 	bname = basename(path2);
 
 	int len = strlen(bname);
 	int i;
+//	fprintf(stdout, "[isCsFile] path = %s and basename is %s\n", path, bname);
 
 	bool b = true;	// 만약 파일 이름에 확장자가 있다면 true, 없다면 false
 	for (i = 0; i < strlen(suffix); i++) {
@@ -144,13 +158,14 @@ void get_cache_path(char *dst, const char* path, int size) {
 static int cs_getattr(const char *path, struct stat *stbuf)
 {
 	int res = 0;
-	char temp[512];
-	get_cache_path(temp, path, 512);
+	char temp[BUFFER_SIZE];
+	get_cache_path(temp, path, BUFFER_SIZE);
 
 	char *bname;
 	char *path2 = strdup(path);
 	bname = basename(path2);
 
+	// 숨김파일은 없는 파일로 처리
 	if (bname[0] == '.')
 		return -ENOENT;
 
@@ -172,8 +187,8 @@ static int cs_getattr(const char *path, struct stat *stbuf)
 	}
 	if (res == -1)
 		return -errno;
+
 	return 0;
-	//return res;
 }
 
 /* ==============================================================
@@ -204,8 +219,8 @@ static int cs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		if (dptr->d_type == DT_REG) {
 			// *.cs파일을 제거하게 되면 확장자가 드러나게 되어 파일 처리하기 힘들어짐.
 			// cs확장자를 두되 텍스트편집기가 열리도록 하여 파일 다운로드를 알림.
-			if (dptr->d_name[0] != '.') {
-				// 숨김파일은 보여지지 않는다.
+			// 숨김파일은 보여지지 않는다.
+			if (isCsFile(dptr->d_name)) {
 				filler(buf, dptr->d_name, NULL, 0);
 			}
 		}
@@ -222,7 +237,6 @@ static int cs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
  */
 static int cs_open(const char *path, struct fuse_file_info *fi)
 {
-//	fprintf(stdout, "[open] Open file at %s\n", path);
 	// 숨김파일 처리된 것은 무시한다.
 	char *bname;
 	char *path2 = strdup(path);
@@ -268,6 +282,7 @@ static int cs_read(const char *path, char *buf, size_t size, off_t offset,
 	// ==============================================================
 	// 사용자에게 보여주기 위한 정보들
 	// 파일 이름
+	reading = true;
 	printf("[read] Read a meta file at %s\n", path);
 	char *bname;
 	char *path2 = strdup(path);
@@ -345,7 +360,6 @@ static int cs_statfs(const char *path, struct statvfs *stbuf)
 static int cs_write(const char *path, const char *buf, size_t size,
                      off_t offset, struct fuse_file_info *fi)
 {
-	printf("[write] Write data to file at %s\n", path);
 	/*
 	 * write한 경우 Java based 프로그램에게 경로를 알리고
 	 * 파일 업로드 후에 Operator에서 메타 데이터 파일을 만든 후
@@ -362,9 +376,7 @@ static int cs_write(const char *path, const char *buf, size_t size,
 	res = pwrite(fi->fh, buf, size, offset);
 	if (res == -1)
 		res = -errno;
-
-	// 함수를 끝내기 전에 Operator에 업로드를 요청한다.
-	requestFileUpload(temp);
+	writing = true;
 
 	return res;
 }
@@ -388,6 +400,31 @@ static int cs_mknod(const char *path, mode_t mode, dev_t rdev)
 	return 0;
 }
 
+static int cs_flush(const char *path, struct fuse_file_info *fi)
+{
+	int res;
+	(void) path;
+	char temp[256];
+	get_cache_path(temp, path, 256);
+
+	if ((fi->flags & 3) != O_WRONLY) {
+		if (!reading && writing) {
+			requestFileUpload(temp);
+		}
+	}
+	res = close(dup(fi->fh));
+
+	if (reading) {
+		reading = false;
+	}
+	if (writing) {
+		writing = false;
+	}
+	if (res == -1)
+		return -errno;
+	return 0;
+}
+
 static struct fuse_operations cloudshare_oper = {
 	.getattr        = cs_getattr,
 	.readdir        = cs_readdir,
@@ -397,6 +434,7 @@ static struct fuse_operations cloudshare_oper = {
 	.statfs			= cs_statfs,
 	.write			= cs_write,
 	.mknod			= cs_mknod,
+	.flush			= cs_flush,
 };
 
 /*
@@ -421,20 +459,19 @@ int main(int argc, char *argv[])
 	// 클라우드 드라이브 마운트 상태를 확인한다.
 	fp = popen("mount | grep -i ndrivefuse | wc -l", "r");
 	if (fp == NULL) {
-		printf("Failed to run command\n" );
-		_exit(1);
+		fprintf(stderr, "Failed to run command\n" );
+		_exit(CLOUD_NOT_MOUNTED);
 	}
 	while (fgets(o_cmd, sizeof(o_cmd)-1, fp) != NULL) {
 		// 출력 부분 확인
 		o_c = atoi(o_cmd);
-		printf("cmd output : %d\n", o_c);
 	}
 	/* Close file descriptor */
 	pclose(fp);
 	// 만약 클라우드가 마운트되어있지 않다면 프로그램을 종료한다.
 	if (o_c == 0) {
 		fprintf(stderr, "Cloud drive is not mounted. (Ndrive)\n");
-		_exit(1);
+		_exit(CLOUD_NOT_MOUNTED);
 	}
 	// 클라우드가 마운트되어 있다면 각 필수 디렉토리를 검사하고 생성한다.
 	if ((home_dir = getenv("HOME")) == NULL) {
@@ -452,7 +489,7 @@ int main(int argc, char *argv[])
 		mkdir(cache_dir, 0755);
 	}
 	else {
-		fprintf(stdout, "Cache directory\t[EXIST]\n");
+		fprintf(stdout, "Cache directory exists. \n");
 	}
 	// 마운트 포인트 디렉토리 확인
 	strcat(mountpoint, home_dir);
@@ -469,16 +506,27 @@ int main(int argc, char *argv[])
     errno = pthread_attr_init(&attr);
     if (errno) {
 		perror("pthread_attr_init");
-		_exit(1);
+		_exit(PTHREAD_ERROR);
     }
+
 	err = pthread_create(&operator_tid, &attr, &listening, NULL);
 	if (err != 0) {
 		fprintf(stdout, "Can't create thread: %s\n", strerror(err));
 	}
 
+	// 실행하기 전에 성공적으로 Operator가 실행되고 있는지 확인하고 확인되면 FUSE를 실행
+	// 아닌 경우에는 프로그램을 종료한다.
+	sleep(WAIT_FOR_RETRY);
+	if (!isOperatorRunning) {
+		// 쓰레드가 살아있는지 확인하고 없다면
+		pthread_cancel(operator_tid);
+		exit(1);
+	}
+
 	// FUSE_main 쓰레드를 실행한다.
 	int status;
 	int ret = 0;
+
 	ret = fuse_main(argc, argv, &cloudshare_oper, NULL);
 	pthread_cancel(operator_tid);
 	pthread_join(operator_tid, (void **)&status);
