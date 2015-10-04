@@ -519,6 +519,7 @@ int main(int argc, char *argv[])
 	sleep(WAIT_FOR_RETRY);
 	if (!isOperatorRunning) {
 		// 쓰레드가 살아있는지 확인하고 없다면
+		fprintf(stderr, "No thread...exit the program.\n");
 		pthread_cancel(operator_tid);
 		exit(1);
 	}
