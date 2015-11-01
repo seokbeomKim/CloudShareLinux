@@ -52,6 +52,8 @@ char	mountpoint[BUFFER_SIZE]; // 유저에게 보여줄 마운트 포인트
 
 extern void requestFileDownload(char *);
 extern void requestFileUpload(char *);
+extern void requestFileUnlink(char *);
+
 
 static void get_cache_path(char *dst, const char* path, int size);
 
