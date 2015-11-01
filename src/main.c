@@ -326,6 +326,9 @@ static int cs_unlink(const char *path)
 	char temp[256];
 	get_cache_path(temp, path, 256);
 	res = unlink(temp);
+
+	requestFileUnlink(temp);
+
 	if (res == -1)
 		return -errno;
 	return 0;

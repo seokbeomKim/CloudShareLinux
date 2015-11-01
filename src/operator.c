@@ -224,6 +224,20 @@ void synchronizeMetaFiles(void)
 		_exit(FAILED_SEND_MSG);
 	}
 }
+
+void requestFileUnlink(char* filepath)
+{
+	fprintf(stdout, "Request remove file...\n");
+	MESSAGE msg;
+	msg.type = REQUEST_FILEUNLINK;
+	strcpy(msg.value, filepath);
+
+	if (send_message(&msg) == false) {
+		fprintf(stderr, "Failed to send message to Operator. "
+				"There might be connection problem.\n");
+		_exit(2);
+	}
+}
 /*
  * requestFileDownload
  * 파일 다운로드를 요청한다.
@@ -247,7 +261,8 @@ void requestFileDownload(char* filepath)
 	prev_msg.type = msg.type;
 	strcpy(prev_msg.value, msg.value);
 	if (send_message(&msg) == false) {
-		fprintf(stderr, "Failed to send PING to Operator. There might be connection problem.\n");
+		fprintf(stderr, "Failed to send message to Operator. "
+				"There might be connection problem.\n");
 		_exit(2);
 	}
 }

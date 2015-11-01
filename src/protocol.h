@@ -28,6 +28,8 @@ typedef char* MESSAGE_TYPE;
 #define ACK_UPLOAD			 "ack_Upload"
 #define REQUEST_DOWNLOAD	 "request_Download"
 #define ACK_DOWNLOAD		 "ack_Download"
+#define REQUEST_FILEUNLINK	 "request_FileUnlink"
+#define ACK_FILEUNLINK		 "ack_FileUnlink"
 #define REQUEST_CHECK_CONNECTION	 "request_checkconnection"
 #define ACK_CHECK_CONNECTION		 "ack_checkconnection"
 
